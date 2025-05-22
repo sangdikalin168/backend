@@ -1,0 +1,330 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+// Enums
+enum Role {
+  USER
+  ADMIN
+}
+
+enum Gender {
+  MALE
+  FEMALE
+}
+
+enum FinancialAccountType {
+  ASSET
+  LIABILITY
+  EQUITY
+  REVENUE
+  EXPENSE
+}
+
+enum EntryType {
+  CREDIT
+  DEBIT
+}
+
+// Models
+
+model User {
+  id        Int      @id @default(autoincrement())
+  email     String   @unique
+  name      String?
+  password  String
+  role      Role     @default(USER)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  holdRequests     MemberHoldRequest[]     @relation("HoldApprovedBy")
+  transferRequests MemberTransferRequest[] @relation("TransferApprovedBy")
+
+  requestedHolds     MemberHoldRequest[]     @relation("HoldRequestedBy")
+  requestedTransfers MemberTransferRequest[] @relation("TransferRequestedBy")
+
+  // Indexes for performance
+  @@index([email])
+  @@index([role])
+  @@index([createdAt])
+}
+
+model Member {
+  id              Int      @id @default(autoincrement())
+  name            String
+  phone           String?
+  gender          Gender?
+  image           String?
+  rfidTag         String?  @unique
+  fingerprintHash String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Relationships
+  memberships            MemberMembership[]
+  checkIns               MemberCheckIn[]
+  transferRequests       MemberTransferRequest[] @relation("TransferTo")
+  memberTransferRequests MemberTransferRequest[] @relation("TransferFrom")
+  holdRequests           MemberHoldRequest[]
+  promotionUsages        PromotionUsage[]
+
+  // Indexes for performance
+  @@index([name])
+  @@index([phone])
+  @@index([rfidTag])
+  @@index([gender])
+  @@index([createdAt])
+}
+
+model MembershipPackage {
+  id                Int     @id @default(autoincrement())
+  name              String
+  description       String?
+  durationDays      Int
+  maxCheckInsPerDay Int?
+  price             Float
+  isActive          Boolean @default(true)
+
+  memberships MemberMembership[]
+}
+
+model MemberMembership {
+  id                  Int       @id @default(autoincrement())
+  memberId            Int
+  membershipPackageId Int
+  purchaseDate        DateTime  @default(now())
+  expiryDate          DateTime
+  remainingCheckIns   Int?
+  isSuspended         Boolean   @default(false)
+  suspendedUntil      DateTime?
+
+  // Relations
+  member            Member            @relation(fields: [memberId], references: [id], map: "fk_membership_member")
+  membershipPackage MembershipPackage @relation(fields: [membershipPackageId], references: [id], map: "fk_membership_package")
+
+  // These are the array sides of the relation, so remove `map:`
+  transfersFrom MemberTransferRequest[] @relation("TransferFrom")
+  transfersTo   MemberTransferRequest[] @relation("TransferTo")
+  holds         MemberHoldRequest[]
+
+  // Indexes for performance
+  @@index([memberId, expiryDate]) // For reports: "expired members", "active members"
+  @@index([memberId])
+  @@index([membershipPackageId])
+  @@index([expiryDate]) // Find expiring memberships soon
+  @@index([isSuspended])
+  @@index([suspendedUntil])
+}
+
+model MemberCheckIn {
+  id        Int      @id @default(autoincrement())
+  memberId  Int
+  timestamp DateTime @default(now())
+
+  member Member @relation(fields: [memberId], references: [id])
+
+  @@index([memberId, timestamp]) // For reports: "check-ins per member over time"
+}
+
+enum RequestStatus {
+  PENDING
+  APPROVED
+  DECLINED
+}
+
+model MemberTransferRequest {
+  id               Int           @id @default(autoincrement())
+  fromMemberId     Int
+  toMemberId       Int
+  fromMembershipId Int
+  toMembershipId   Int
+  reason           String?
+  requestedAt      DateTime      @default(now())
+  approvedAt       DateTime?
+  status           RequestStatus @default(PENDING)
+
+  approvedById Int?
+  approvedBy   User? @relation("TransferApprovedBy", fields: [approvedById], references: [id], map: "fk_transfer_approved_by_user")
+
+  requestedById Int?
+  requestedBy   User? @relation("TransferRequestedBy", fields: [requestedById], references: [id], map: "fk_transfer_requested_by_user")
+
+  fromMember     Member           @relation("TransferFrom", fields: [fromMemberId], references: [id], map: "fk_transfer_from_member")
+  toMember       Member           @relation("TransferTo", fields: [toMemberId], references: [id], map: "fk_transfer_to_member")
+  fromMembership MemberMembership @relation("TransferFrom", fields: [fromMembershipId], references: [id], map: "fk_transfer_from_membership")
+  toMembership   MemberMembership @relation("TransferTo", fields: [toMembershipId], references: [id], map: "fk_transfer_to_membership")
+
+  @@index([fromMemberId, toMemberId]) // Track transfers
+  @@index([status]) // Filter all pending/approved requests
+}
+
+model MemberHoldRequest {
+  id           Int           @id @default(autoincrement())
+  memberId     Int
+  membershipId Int
+  reason       String?
+  startDate    DateTime
+  endDate      DateTime
+  status       RequestStatus @default(PENDING)
+  requestedAt  DateTime      @default(now())
+  approvedAt   DateTime?
+
+  // 🔁 Relations
+  member     Member           @relation(fields: [memberId], references: [id])
+  membership MemberMembership @relation(fields: [membershipId], references: [id])
+
+  approvedById Int?
+  approvedBy   User? @relation("HoldApprovedBy", fields: [approvedById], references: [id])
+
+  requestedById Int?
+  requestedBy   User? @relation("HoldRequestedBy", fields: [requestedById], references: [id])
+
+  // Indexes for performance
+  @@index([memberId])
+  @@index([membershipId])
+  @@index([status])
+  @@index([requestedAt])
+  @@index([approvedAt])
+  @@index([approvedById])
+  @@index([requestedById])
+  @@index([memberId, status]) // List members on hold
+  @@index([endDate]) // Auto-renewals or expiring holds
+}
+
+model Ticket {
+  id        Int      @id @default(autoincrement())
+  qrCode    String   @unique
+  printedBy String
+  soldAt    DateTime @default(now())
+  expiresAt DateTime
+  isUsed    Boolean  @default(false)
+
+  checkIns TicketCheckIn[]
+}
+
+model TicketCheckIn {
+  id        Int      @id @default(autoincrement())
+  ticketId  Int
+  timestamp DateTime @default(now())
+
+  ticket Ticket @relation(fields: [ticketId], references: [id])
+
+  @@index([ticketId, timestamp]) // For sales & usage analysis
+}
+
+model CouponCard {
+  id               Int     @id @default(autoincrement())
+  name             String
+  totalUses        Int
+  durationDays     Int?
+  price            Decimal
+  expiresAfterDays Int
+  isActive         Boolean @default(true)
+
+  coupons Coupon[]
+}
+
+model Coupon {
+  id            Int      @id @default(autoincrement())
+  couponId      Int
+  qrCode        String   @unique
+  soldAt        DateTime @default(now())
+  printedBy     String
+  expiresAt     DateTime
+  remainingUses Int
+  timestamp     DateTime @default(now())
+
+  couponType CouponCard      @relation(fields: [couponId], references: [id])
+  checkIns   CouponCheckIn[]
+
+  @@index([couponId, timestamp]) // For usage tracking
+}
+
+model CouponCheckIn {
+  id        Int      @id @default(autoincrement())
+  couponId  Int
+  timestamp DateTime @default(now())
+
+  coupon Coupon @relation(fields: [couponId], references: [id])
+
+  @@index([couponId, timestamp]) // For usage tracking
+}
+
+model Promotion {
+  id              Int      @id @default(autoincrement())
+  code            String   @unique
+  name            String
+  discountPercent Float?
+  discountAmount  Decimal?
+  startDate       DateTime
+  endDate         DateTime
+  isActive        Boolean  @default(true)
+
+  usages PromotionUsage[]
+}
+
+model PromotionUsage {
+  id          Int      @id @default(autoincrement())
+  promotionId Int
+  usedById    Int?
+  usedAt      DateTime @default(now())
+
+  promotion Promotion @relation(fields: [promotionId], references: [id], map: "fk_promotion_usage_promotion")
+  user      Member?   @relation(fields: [usedById], references: [id], map: "fk_promotion_used_by_member")
+
+  @@index([promotionId, usedById]) // See who used which promo code
+  @@index([usedAt]) // Analyze promo code usage over time
+}
+
+model Account {
+  id      Int                  @id @default(autoincrement())
+  name    String               @unique
+  type    FinancialAccountType
+  balance Decimal              @default(0.0)
+
+  creditEntries JournalLineItem[] @relation("CreditRelation")
+  debitEntries  JournalLineItem[] @relation("DebitRelation")
+}
+
+model JournalEntry {
+  id          Int      @id @default(autoincrement())
+  description String
+  referenceId String?
+  postedAt    DateTime @default(now())
+
+  // Relations
+  lineItems   JournalLineItem[] @relation("JournalEntryToJournalLineItem")
+  totalCredit Decimal?
+  totalDebit  Decimal?
+
+  @@index([postedAt]) // Group by month/year
+}
+
+model JournalLineItem {
+  id        Int       @id @default(autoincrement())
+  accountId Int
+  journalId Int
+  amount    Decimal
+  type      EntryType
+
+  // Relations
+  accountCredit Account?     @relation("CreditRelation", fields: [accountId], references: [id], map: "fk_journal_credit_account")
+  accountDebit  Account?     @relation("DebitRelation", fields: [accountId], references: [id], map: "fk_journal_debit_account")
+  journal       JournalEntry @relation("JournalEntryToJournalLineItem", fields: [journalId], references: [id])
+
+  @@index([accountId]) // Group by account (e.g., all revenue entries)
+  @@index([journalId]) // Group by journal entry
+}
