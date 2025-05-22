@@ -7,7 +7,8 @@ import { authenticate } from './common/middlewares/auth.middleware';
 import { Request, Response, NextFunction } from 'express';
 import { Context } from './common/types/context.type';
 import { ExpressContextFunctionArgument } from '@apollo/server/express4';
-import { ApolloServerPluginLandingPageLocalDefault } from '@apollo/server/plugin/landingPage/default';
+import { ApolloServerPluginLandingPageGraphQLPlayground } from '@apollo/server-plugin-landing-page-graphql-playground';
+
 
 async function startServer() {
     const app = createApp();
@@ -16,7 +17,8 @@ async function startServer() {
     const server = new ApolloServer<Context>({
         typeDefs,
         resolvers,
-        plugins: [ApolloServerPluginLandingPageLocalDefault({ embed: true })],
+        introspection: true,
+        plugins: [ApolloServerPluginLandingPageGraphQLPlayground()],
     });
 
     await server.start();
